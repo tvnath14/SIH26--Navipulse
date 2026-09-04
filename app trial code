@@ -1,0 +1,467 @@
+"""
+Nav Telemetry — Mobile Dashboard (Flet)
+========================================
+A standalone, interactive recreation of the GNSS-denied dead-reckoning
+telemetry dashboard, built with Flet (https://flet.dev) — pure Python
+on top of Flutter. This file is completely independent of any existing
+webapp source code.
+
+WHAT'S SIMULATED (this is a demo, not real sensor fusion):
+  - A vehicle drives along a gently curving route ("ground truth").
+  - While GNSS is "denied", the estimated position drifts away from the
+    ground truth, and drift/outage stats grow accordingly.
+  - Tapping "RESTORE GNSS FIX" snaps the estimate back and resets drift;
+    tapping it again re-enters a simulated outage, so you can demo the
+    full loop repeatedly.
+  - You can draw directly on the map (mouse-drag or finger-drag on
+    mobile). The drawn path is stored in world coordinates, so it stays
+    anchored to the map as the camera follows the moving vehicle,
+    matching the "Custom Drawn Path" behaviour in the original tool.
+
+RUN LOCALLY (desktop preview, hot reload on save):
+    flet run app.py
+
+PREVIEW ON YOUR PHONE (no build needed, same Wi-Fi network):
+    flet run app.py --web
+
+BUILD A REAL INSTALLABLE APP:
+    flet build apk       (Android)
+    flet build ipa        (iOS, requires macOS + Xcode)
+"""
+
+import asyncio
+import math
+import random
+from dataclasses import dataclass, field
+
+import flet as ft
+import flet.canvas as cv
+
+# ---------------------------------------------------------------------------
+# THEME
+# ---------------------------------------------------------------------------
+BG = "#0b0f1a"
+CARD_BG = "#111827"
+BORDER = "#1f2937"
+TEXT_DIM = "#8b93a7"
+TEXT_MAIN = "#f5f6fa"
+TEAL = "#2dd4bf"
+ORANGE = "#f5a524"
+PURPLE = "#a855f7"
+RED = "#ef4444"
+GREEN = "#22c55e"
+BLUE = "#3b82f6"
+FONT_MONO = "Consolas, Menlo, monospace"
+
+MAP_WIDTH = 350
+MAP_HEIGHT = 280
+SCALE = 4.0            # pixels per simulated meter
+TICK_SECONDS = 0.6     # simulation step
+MAX_TRAIL = 150         # trail points kept per path
+MAX_CUSTOM_PTS = 1200   # cap on hand-drawn points
+BASE_LAT = 28.61450
+BASE_LON = 77.20823
+
+
+# ---------------------------------------------------------------------------
+# SIMULATION STATE
+# ---------------------------------------------------------------------------
+@dataclass
+class Sim:
+    ground_x: float = 0.0
+    ground_y: float = 0.0
+    heading: float = 0.0
+    est_x: float = 0.0
+    est_y: float = 0.0
+    cam_x: float = 0.0
+    cam_y: float = 0.0
+    follow: bool = True
+    drift: float = 0.0
+    outage_distance: float = 0.0
+    outage_duration: float = 0.0
+    total_distance: float = 0.0
+    speed_kmh: float = 80.0
+    nav_mode: str = "DEAD_RECKONING"     # or "GNSS_FIX"
+    eskf_latency: float = 1.55
+    pitch_deg: float = 0.1
+    roll_deg: float = -0.2
+    frame: int = 700
+    ground_trail: list = field(default_factory=list)
+    est_trail: list = field(default_factory=list)
+    custom_world_points: list = field(default_factory=list)
+
+    def world_to_screen(self, wx, wy):
+        return (
+            MAP_WIDTH / 2 + (wx - self.cam_x) * SCALE,
+            MAP_HEIGHT / 2 + (wy - self.cam_y) * SCALE,
+        )
+
+    def screen_to_world(self, sx, sy):
+        return (
+            (sx - MAP_WIDTH / 2) / SCALE + self.cam_x,
+            (sy - MAP_HEIGHT / 2) / SCALE + self.cam_y,
+        )
+
+
+sim = Sim()
+sim.ground_trail.append((0.0, 0.0))
+sim.est_trail.append((0.0, 0.0))
+
+
+def tick():
+    """Advance the simulation by one step. Pure state update, no UI calls."""
+    sim.speed_kmh = 80 + random.uniform(-0.6, 0.6)
+    step_m = (sim.speed_kmh / 3.6) * TICK_SECONDS
+    sim.total_distance += step_m
+
+    # Gently curving route, like a winding tunnel road.
+    sim.heading += 0.35 * math.sin(sim.frame * 0.04) * 0.05 + random.uniform(-0.01, 0.01)
+    sim.ground_x += math.cos(sim.heading) * step_m
+    sim.ground_y += math.sin(sim.heading) * step_m
+
+    if sim.nav_mode == "DEAD_RECKONING":
+        sim.outage_distance += step_m
+        sim.outage_duration += TICK_SECONDS
+        sim.drift += step_m * 0.0157 + random.uniform(-0.01, 0.015)
+        sim.drift = max(0.0, sim.drift)
+        drift_angle = sim.heading + 0.6
+        sim.est_x = sim.ground_x + sim.drift * math.cos(drift_angle)
+        sim.est_y = sim.ground_y + sim.drift * math.sin(drift_angle)
+    else:
+        sim.drift = 0.0
+        sim.outage_distance = 0.0
+        sim.outage_duration = 0.0
+        sim.est_x, sim.est_y = sim.ground_x, sim.ground_y
+
+    sim.eskf_latency = max(0.4, 1.5 + random.uniform(-0.2, 0.2))
+    sim.pitch_deg = round(0.1 + random.uniform(-0.05, 0.05), 2)
+    sim.roll_deg = round(-0.2 + random.uniform(-0.05, 0.05), 2)
+
+    if sim.follow:
+        sim.cam_x, sim.cam_y = sim.est_x, sim.est_y
+
+    sim.ground_trail.append((sim.ground_x, sim.ground_y))
+    sim.est_trail.append((sim.est_x, sim.est_y))
+    if len(sim.ground_trail) > MAX_TRAIL:
+        sim.ground_trail.pop(0)
+    if len(sim.est_trail) > MAX_TRAIL:
+        sim.est_trail.pop(0)
+
+    sim.frame += 1
+
+
+def drift_pct():
+    if sim.outage_distance > 0:
+        return sim.drift / sim.outage_distance * 100
+    return 0.0
+
+
+def lat_lon():
+    lat = BASE_LAT + sim.est_y / 111_320
+    lon = BASE_LON + sim.est_x / (111_320 * math.cos(math.radians(BASE_LAT)))
+    return lat, lon
+
+
+# ---------------------------------------------------------------------------
+# REUSABLE UI PIECES
+# ---------------------------------------------------------------------------
+def stat_card(title, value_ctrl, unit="", subtitle_ctrl=None):
+    controls = [value_ctrl]
+    if unit:
+        controls.append(ft.Text(unit, size=12, color=TEXT_DIM))
+    col = [
+        ft.Text(title.upper(), size=11, color=TEXT_DIM, weight=ft.FontWeight.W_600),
+        ft.Row(spacing=6, controls=controls),
+    ]
+    if subtitle_ctrl is not None:
+        col.append(subtitle_ctrl)
+    return ft.Container(
+        bgcolor=CARD_BG,
+        border=ft.Border.all(1, BORDER),
+        border_radius=10,
+        padding=14,
+        width=200,
+        content=ft.Column(spacing=4, controls=col),
+    )
+
+
+def nav_state_row(label, value_ctrl):
+    return ft.Row(
+        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+        controls=[ft.Text(label.upper(), size=11, color=TEXT_DIM), value_ctrl],
+    )
+
+
+def legend_item(color, label):
+    return ft.Row(
+        spacing=6,
+        controls=[
+            ft.Container(width=14, height=4, bgcolor=color, border_radius=2),
+            ft.Text(label, size=10, color=TEXT_DIM),
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
+# APP
+# ---------------------------------------------------------------------------
+async def main(page: ft.Page):
+    page.title = "Nav Telemetry"
+    page.bgcolor = BG
+    page.padding = 12
+    page.theme_mode = ft.ThemeMode.DARK
+    page.scroll = ft.ScrollMode.AUTO
+
+    # ---- Text controls that get live-updated every tick ----
+    speed_val = ft.Text("--", size=22, weight=ft.FontWeight.BOLD, color=TEXT_MAIN)
+    dist_val = ft.Text("--", size=22, weight=ft.FontWeight.BOLD, color=TEXT_MAIN)
+    dist_sub = ft.Text("", size=11, color=TEXT_DIM)
+    drift_val = ft.Text("--", size=22, weight=ft.FontWeight.BOLD, color=TEXT_MAIN)
+    drift_sub = ft.Text("", size=11, color=TEXT_DIM)
+    bench_val = ft.Text("--", size=22, weight=ft.FontWeight.BOLD, color=GREEN)
+    latency_val = ft.Text("--", size=22, weight=ft.FontWeight.BOLD, color=TEXT_MAIN)
+    latency_sub = ft.Text("50Hz Budget: <20ms", size=11, color=TEXT_DIM)
+    mode_val = ft.Text("DEAD_RECKONING", size=16, weight=ft.FontWeight.BOLD, color=ORANGE)
+    mode_sub = ft.Text("BLACKOUT (OUTAGE)", size=11, color=TEXT_DIM)
+
+    pos_est_val = ft.Text("--", size=13, color=TEXT_MAIN, font_family=FONT_MONO, weight=ft.FontWeight.BOLD)
+    pos_true_val = ft.Text("--", size=13, color=TEXT_MAIN, font_family=FONT_MONO, weight=ft.FontWeight.BOLD)
+    zupt_val = ft.Text("NO (Moving)", size=13, color=TEXT_MAIN, font_family=FONT_MONO, weight=ft.FontWeight.BOLD)
+    calib_val = ft.Text("--", size=13, color=TEXT_MAIN, font_family=FONT_MONO, weight=ft.FontWeight.BOLD)
+    latlon_val = ft.Text("--", size=13, color=TEXT_MAIN, font_family=FONT_MONO, weight=ft.FontWeight.BOLD)
+    custom_status_val = ft.Text("Empty (0 pts)", size=13, color=PURPLE, font_family=FONT_MONO, weight=ft.FontWeight.BOLD)
+
+    tunnel_banner = ft.Text("● GNSS DENIED TUNNEL ENVIRONMENT ACTIVE", size=11, color=RED)
+    telemetry_list = ft.ListView(spacing=4, auto_scroll=True, height=180)
+
+    # ---- Map canvas + drawing ----
+    def rebuild_canvas():
+        shapes = []
+
+        # Hand-drawn custom path (world-anchored purple dots)
+        for wx, wy in sim.custom_world_points:
+            sx, sy = sim.world_to_screen(wx, wy)
+            if -10 <= sx <= MAP_WIDTH + 10 and -10 <= sy <= MAP_HEIGHT + 10:
+                shapes.append(cv.Circle(sx, sy, 2.2, paint=ft.Paint(color=PURPLE)))
+
+        def trail_path(points, color):
+            pts = [sim.world_to_screen(x, y) for (x, y) in points]
+            elems = [cv.Path.MoveTo(*pts[0])] + [cv.Path.LineTo(x, y) for x, y in pts[1:]]
+            return cv.Path(
+                elements=elems,
+                paint=ft.Paint(stroke_width=4, style=ft.PaintingStyle.STROKE, color=color),
+            )
+
+        if len(sim.ground_trail) > 1:
+            shapes.append(trail_path(sim.ground_trail, TEAL))
+        if len(sim.est_trail) > 1:
+            shapes.append(trail_path(sim.est_trail, ORANGE))
+
+        vx, vy = sim.world_to_screen(sim.est_x, sim.est_y)
+        shapes.append(cv.Circle(vx, vy, 10, paint=ft.Paint(color="#3a2a13")))
+        shapes.append(
+            cv.Circle(vx, vy, 10, paint=ft.Paint(color=ORANGE, style=ft.PaintingStyle.STROKE, stroke_width=2))
+        )
+        canvas.shapes = shapes
+
+    def on_pan_update(e: ft.DragUpdateEvent):
+        sx, sy = e.local_position.x, e.local_position.y
+        wx, wy = sim.screen_to_world(sx, sy)
+        sim.custom_world_points.append((wx, wy))
+        if len(sim.custom_world_points) > MAX_CUSTOM_PTS:
+            sim.custom_world_points.pop(0)
+        # immediate visual feedback between simulation ticks
+        canvas.shapes.append(cv.Circle(sx, sy, 2.2, paint=ft.Paint(color=PURPLE)))
+        custom_status_val.value = f"Active ({len(sim.custom_world_points)} pts)"
+        canvas.update()
+        custom_status_val.update()
+
+    canvas = cv.Canvas(
+        shapes=[],
+        width=MAP_WIDTH,
+        height=MAP_HEIGHT,
+        content=ft.GestureDetector(
+            on_pan_update=on_pan_update,
+            drag_interval=20,
+        ),
+    )
+    rebuild_canvas()
+
+    def on_clear_path(e):
+        sim.custom_world_points.clear()
+        custom_status_val.value = "Empty (0 pts)"
+        rebuild_canvas()
+        page.update()
+
+    def on_follow_change(e):
+        sim.follow = e.control.value
+        if sim.follow:
+            sim.cam_x, sim.cam_y = sim.est_x, sim.est_y
+
+    follow_switch = ft.Switch(value=True, active_color=ORANGE, on_change=on_follow_change)
+
+    top_cards = ft.Row(
+        scroll=ft.ScrollMode.AUTO,
+        spacing=10,
+        controls=[
+            stat_card("Vehicle Velocity", speed_val, "km/h"),
+            stat_card("Total Distance", dist_val, "m", dist_sub),
+            stat_card("Dead Reckoning Drift", drift_val, "m", drift_sub),
+            stat_card("SIH Drift Benchmark", bench_val, "", ft.Text("SIH Benchmark: <10%", size=11, color=TEXT_DIM)),
+            stat_card("ESKF Loop Latency", latency_val, "ms", latency_sub),
+            stat_card("Navigation Mode", mode_val, "", mode_sub),
+        ],
+    )
+
+    map_container = ft.Container(
+        bgcolor="#080b13",
+        border=ft.Border.all(1, BORDER),
+        border_radius=10,
+        padding=10,
+        content=ft.Column(
+            controls=[
+                ft.Row(
+                    wrap=True,
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    controls=[
+                        ft.Row(
+                            wrap=True,
+                            controls=[
+                                legend_item(TEAL, "Ground Truth"),
+                                legend_item(ORANGE, "Dead Reckoning"),
+                                legend_item(PURPLE, "Custom Path"),
+                            ],
+                        ),
+                        ft.Row(spacing=4, controls=[ft.Text("Follow", size=10, color=TEXT_DIM), follow_switch]),
+                    ],
+                ),
+                ft.Text("Draw on the map to add a custom path", size=10, color=TEXT_DIM),
+                canvas,
+                ft.Row(
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    controls=[
+                        tunnel_banner,
+                        ft.TextButton("Clear Path", on_click=on_clear_path),
+                    ],
+                ),
+            ]
+        ),
+    )
+
+    def on_restore_click(e):
+        if sim.nav_mode == "DEAD_RECKONING":
+            sim.nav_mode = "GNSS_FIX"
+            sim.est_x, sim.est_y = sim.ground_x, sim.ground_y
+            sim.drift = 0.0
+            sim.outage_distance = 0.0
+            sim.outage_duration = 0.0
+            restore_btn.bgcolor = BLUE
+            restore_btn.content.controls[1].value = "SIMULATE GNSS LOSS"
+            mode_val.value, mode_val.color = "GNSS_FIX", GREEN
+            mode_sub.value = "ACTIVE"
+            tunnel_banner.visible = False
+        else:
+            sim.nav_mode = "DEAD_RECKONING"
+            restore_btn.bgcolor = RED
+            restore_btn.content.controls[1].value = "RESTORE GNSS FIX"
+            mode_val.value, mode_val.color = "DEAD_RECKONING", ORANGE
+            mode_sub.value = "BLACKOUT (OUTAGE)"
+            tunnel_banner.visible = True
+        page.update()
+
+    restore_btn = ft.ElevatedButton(
+        content=ft.Row(
+            alignment=ft.MainAxisAlignment.CENTER,
+            controls=[ft.Icon(ft.Icons.GPS_OFF, color="white", size=18), ft.Text("RESTORE GNSS FIX", weight=ft.FontWeight.BOLD)],
+        ),
+        bgcolor=RED,
+        color="white",
+        height=48,
+        width=MAP_WIDTH,
+        on_click=on_restore_click,
+    )
+
+    nav_state_panel = ft.Container(
+        bgcolor=CARD_BG,
+        border=ft.Border.all(1, BORDER),
+        border_radius=10,
+        padding=14,
+        content=ft.Column(
+            spacing=10,
+            controls=[
+                ft.Text("LIVE NAVIGATION STATE", size=12, color=TEXT_DIM, weight=ft.FontWeight.W_600),
+                nav_state_row("Position Est (X, Y)", pos_est_val),
+                nav_state_row("Position True (X, Y)", pos_true_val),
+                nav_state_row("Stationary (ZUPT)", zupt_val),
+                nav_state_row("Calibration (Attitude)", calib_val),
+                nav_state_row("WGS-84 Lat/Lon", latlon_val),
+                nav_state_row("Custom Path Status", custom_status_val),
+            ],
+        ),
+    )
+
+    telemetry_panel = ft.Container(
+        bgcolor=CARD_BG,
+        border=ft.Border.all(1, BORDER),
+        border_radius=10,
+        padding=14,
+        content=ft.Column(
+            controls=[
+                ft.Text("REAL-TIME TELEMETRY FEED", size=12, color=TEXT_DIM, weight=ft.FontWeight.W_600),
+                telemetry_list,
+            ]
+        ),
+    )
+
+    page.add(
+        ft.Column(
+            spacing=14,
+            controls=[
+                top_cards,
+                map_container,
+                restore_btn,
+                nav_state_panel,
+                telemetry_panel,
+            ],
+        )
+    )
+
+    async def update_loop():
+        while True:
+            tick()
+            dp = drift_pct()
+
+            speed_val.value = f"{sim.speed_kmh:.1f}"
+            dist_val.value = f"{sim.total_distance:.1f}"
+            dist_sub.value = f"Outage Duration: {sim.outage_duration:.1f}s"
+            drift_val.value = f"{sim.drift:.2f}"
+            drift_sub.value = f"Outage Dist: {sim.outage_distance:.1f} m"
+            bench_val.value = f"{dp:.2f}% ({'PASS' if dp < 10 else 'FAIL'})"
+            bench_val.color = GREEN if dp < 10 else RED
+            latency_val.value = f"{sim.eskf_latency:.2f}"
+            latency_sub.value = f"50Hz Budget: <20ms ({'PASS' if sim.eskf_latency < 20 else 'FAIL'})"
+
+            pos_est_val.value = f"[{sim.est_x:.2f}, {sim.est_y:.2f}]"
+            pos_true_val.value = f"[{sim.ground_x:.2f}, {sim.ground_y:.2f}]"
+            calib_val.value = f"P: {sim.pitch_deg}° | R: {sim.roll_deg}°"
+            lat, lon = lat_lon()
+            latlon_val.value = f"{lat:.5f}, {lon:.5f}"
+
+            rebuild_canvas()
+
+            line = (
+                f"[#{sim.frame}] {sim.nav_mode} | {sim.speed_kmh:.1f}km/h | "
+                f"Drift: {sim.drift:.2f}m ({dp:.2f}%)"
+            )
+            telemetry_list.controls.append(ft.Text(line, size=11, font_family=FONT_MONO, color=TEXT_MAIN))
+            if len(telemetry_list.controls) > 60:
+                telemetry_list.controls.pop(0)
+
+            page.update()
+            await asyncio.sleep(TICK_SECONDS)
+
+    page.run_task(update_loop)
+
+
+if __name__ == "__main__":
+    ft.run(main)

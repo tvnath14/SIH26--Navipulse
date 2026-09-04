@@ -1,1 +1,2 @@
-# SIH26--Navipulse
+# Navipulse
+Ai based intelligent Dead Reckoning system for seamless Navigation, SIH

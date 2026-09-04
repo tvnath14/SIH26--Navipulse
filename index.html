@@ -1,0 +1,1479 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Intelligent Dead Reckoning Navigation | Mission Control & Driver HUD</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- Leaflet CSS & JS for Real-World Map -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
+  <style>
+    :root {
+      --bg-dark: #07090E;
+      --panel-bg: rgba(17, 24, 39, 0.85);
+      --panel-border: rgba(255, 255, 255, 0.08);
+      --accent-gnss: #10B981;       /* Emerald */
+      --accent-dr: #F59E0B;         /* Amber */
+      --accent-stat: #38BDF8;       /* Sky */
+      --accent-alert: #EF4444;      /* Red */
+      --text-main: #F3F4F6;
+      --text-muted: #9CA3AF;
+      --primary: #2563EB;
+      --primary-hover: #1D4ED8;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Outfit', sans-serif;
+      background: var(--bg-dark);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+    }
+
+    /* HEADER */
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 14px 28px;
+      border-bottom: 1px solid var(--panel-border);
+      background: rgba(11, 15, 25, 0.94);
+      backdrop-filter: blur(14px);
+      z-index: 1000;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .title-area h1 {
+      font-size: 19px;
+      font-weight: 700;
+      letter-spacing: -0.4px;
+      color: #FFFFFF;
+    }
+    .subtitle {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    /* VIEW SWITCHER SEGMENTED CONTROL */
+    .view-switcher {
+      display: flex;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--panel-border);
+      border-radius: 10px;
+      padding: 3px;
+      gap: 4px;
+    }
+    .view-btn {
+      font-family: 'Outfit', sans-serif;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 8px 18px;
+      border-radius: 7px;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .view-btn.active {
+      background: #2563EB;
+      color: white;
+      box-shadow: 0 2px 8px rgba(37, 99, 235, 0.35);
+    }
+    .view-btn:hover:not(.active) {
+      color: var(--text-main);
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .reset-btn {
+      font-family: 'Outfit', sans-serif;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 8px 14px;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text-main);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s ease;
+    }
+    .reset-btn:hover {
+      background: rgba(255, 255, 255, 0.15);
+      border-color: rgba(255, 255, 255, 0.25);
+    }
+
+    .status-pill {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      padding: 6px 12px;
+      border-radius: 20px;
+      border: 1px solid var(--panel-border);
+      background: rgba(15, 23, 42, 0.6);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .pulse-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #10B981;
+      box-shadow: 0 0 8px #10B981;
+      animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.3; transform: scale(0.8); } }
+
+    /* INTERACTIVE COCKPIT BAR (OPERATIONS GROUPED) */
+    .cockpit-bar {
+      background: rgba(15, 23, 42, 0.96);
+      border-bottom: 1px solid var(--panel-border);
+      padding: 10px 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      flex-wrap: wrap;
+      z-index: 999;
+    }
+    .cockpit-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .control-label {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+    }
+
+    .preset-btn {
+      font-family: 'Outfit', sans-serif;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 6px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--panel-border);
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text-main);
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .preset-btn:hover { background: rgba(255, 255, 255, 0.12); }
+    .btn-brake {
+      background: rgba(239, 68, 68, 0.2);
+      color: #EF4444;
+      border-color: rgba(239, 68, 68, 0.4);
+      font-weight: 700;
+    }
+    .btn-brake:hover {
+      background: #EF4444;
+      color: white;
+    }
+
+    .slider-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .slider-group input[type="range"] {
+      width: 110px;
+      accent-color: #2563EB;
+      cursor: pointer;
+    }
+    .slider-val {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      font-weight: 700;
+      color: #38BDF8;
+      min-width: 55px;
+    }
+
+    .cockpit-select {
+      background: #0B0E17;
+      color: var(--text-main);
+      border: 1px solid var(--panel-border);
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-family: 'Outfit', sans-serif;
+      font-size: 11px;
+      cursor: pointer;
+    }
+
+    .btn-draw-path {
+      font-family: 'Outfit', sans-serif;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 6px 12px;
+      border-radius: 6px;
+      border: 1px solid rgba(56, 189, 248, 0.4);
+      background: rgba(56, 189, 248, 0.15);
+      color: #38BDF8;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      transition: all 0.2s ease;
+    }
+    .btn-draw-path:hover { background: rgba(56, 189, 248, 0.25); }
+    .btn-draw-path.drawing-active {
+      background: #38BDF8;
+      color: #07090E;
+      font-weight: 700;
+      box-shadow: 0 0 12px rgba(56, 189, 248, 0.6);
+      animation: pulse 1.5s infinite;
+    }
+
+    .btn-reset-path {
+      font-family: 'Outfit', sans-serif;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 6px 12px;
+      border-radius: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text-muted);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      transition: all 0.2s ease;
+    }
+    .btn-reset-path:hover { background: rgba(255, 255, 255, 0.12); color: var(--text-main); }
+
+    .btn-stream {
+      font-family: 'Outfit', sans-serif;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 8px 18px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .btn-start {
+      background: #2563EB;
+      color: white;
+      box-shadow: 0 2px 10px rgba(37, 99, 235, 0.4);
+    }
+    .btn-start:hover { background: #1D4ED8; }
+    .btn-pause {
+      background: rgba(255, 255, 255, 0.12);
+      color: white;
+    }
+    .btn-pause:hover { background: rgba(255, 255, 255, 0.2); }
+
+    /* VIEW CONTAINERS */
+    .view-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* MISSION CONTROL VIEW */
+    #missionControlView {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      flex: 1;
+    }
+    .metric-strip {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      padding: 16px 28px 8px 28px;
+    }
+    .metric-card {
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      border-radius: 12px;
+      padding: 14px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      backdrop-filter: blur(8px);
+      transition: all 0.3s ease;
+    }
+    .metric-card.alert-violated {
+      border-color: #EF4444;
+      background: rgba(239, 68, 68, 0.12);
+    }
+    .metric-card.alert-warning {
+      border-color: #F59E0B;
+      background: rgba(245, 158, 11, 0.12);
+    }
+    .metric-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-muted);
+    }
+    .metric-val {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 24px;
+      font-weight: 700;
+      color: #FFF;
+    }
+    .metric-sub {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .main-grid {
+      display: grid;
+      grid-template-columns: 1fr 340px;
+      gap: 20px;
+      padding: 8px 28px 24px 28px;
+      flex: 1;
+    }
+    .map-container {
+      background: #0B0E17;
+      border: 1px solid var(--panel-border);
+      border-radius: 16px;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      min-height: 500px;
+    }
+    .map-header {
+      position: absolute;
+      top: 14px;
+      left: 18px;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(10px);
+      padding: 6px 14px;
+      border-radius: 8px;
+      border: 1px solid var(--panel-border);
+      font-size: 12px;
+    }
+    .legend-item { display: flex; align-items: center; gap: 6px; }
+    .legend-line { width: 14px; height: 3px; border-radius: 2px; }
+
+    /* DRAW HELPER BANNER ON CANVAS */
+    .draw-helper-banner {
+      position: absolute;
+      top: 14px;
+      right: 18px;
+      z-index: 10;
+      display: none;
+      align-items: center;
+      gap: 8px;
+      background: rgba(56, 189, 248, 0.15);
+      border: 1px solid #38BDF8;
+      border-radius: 8px;
+      padding: 8px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #38BDF8;
+      backdrop-filter: blur(10px);
+    }
+
+    canvas#mapCanvas {
+      width: 100%;
+      height: 100%;
+      min-height: 500px;
+      display: block;
+    }
+    canvas#mapCanvas.crosshair {
+      cursor: crosshair !important;
+    }
+
+    /* SIDEBAR WITH GNSS TOGGLE BUTTON */
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .gnss-sidebar-btn {
+      width: 100%;
+      padding: 12px 16px;
+      border-radius: 10px;
+      border: 1px solid rgba(239, 68, 68, 0.35);
+      background: rgba(239, 68, 68, 0.12);
+      color: #EF4444;
+      font-family: 'Outfit', sans-serif;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: all 0.25s ease;
+    }
+    .gnss-sidebar-btn:hover {
+      background: rgba(239, 68, 68, 0.22);
+      border-color: #EF4444;
+    }
+    .gnss-sidebar-btn.active-outage {
+      background: #EF4444;
+      color: #FFFFFF;
+      box-shadow: 0 0 16px rgba(239, 68, 68, 0.6);
+      animation: pulseAlert 1.5s infinite;
+    }
+    @keyframes pulseAlert {
+      0%, 100% { box-shadow: 0 0 14px rgba(239, 68, 68, 0.5); }
+      50% { box-shadow: 0 0 24px rgba(239, 68, 68, 0.85); }
+    }
+
+    .control-card {
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      border-radius: 14px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      backdrop-filter: blur(8px);
+    }
+    .card-title {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-muted);
+    }
+    .hud-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+      padding: 4px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    }
+    .hud-val {
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 600;
+    }
+    .telemetry-log {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: #94A3B8;
+      background: #05070D;
+      border-radius: 8px;
+      padding: 10px;
+      height: 180px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .log-row { border-bottom: 1px solid rgba(255, 255, 255, 0.04); padding-bottom: 2px; }
+
+    /* DRIVER NAVIGATION VIEW */
+    #driverNavView {
+      display: none;
+      flex: 1;
+      position: relative;
+      background: #07090E;
+      min-height: calc(100vh - 120px);
+    }
+    #driverMap {
+      width: 100%;
+      height: 100%;
+      min-height: calc(100vh - 120px);
+      background: #07090E;
+    }
+
+    /* DRIVER HUD OVERLAYS */
+    .driver-top-banner {
+      position: absolute;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 999;
+      background: rgba(15, 23, 42, 0.92);
+      border: 1px solid var(--panel-border);
+      border-radius: 30px;
+      padding: 10px 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(12px);
+      transition: all 0.3s ease;
+      cursor: pointer;
+    }
+    .driver-top-banner.banner-gnss {
+      border-color: rgba(16, 185, 129, 0.5);
+      color: #10B981;
+    }
+    .driver-top-banner.banner-outage {
+      border-color: #EF4444;
+      background: rgba(239, 68, 68, 0.25);
+      color: #FFFFFF;
+      box-shadow: 0 0 24px rgba(239, 68, 68, 0.6);
+    }
+    .banner-text {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+    }
+
+    .driver-speedo-hud {
+      position: absolute;
+      bottom: 24px;
+      left: 24px;
+      z-index: 999;
+      background: rgba(11, 15, 25, 0.9);
+      border: 1px solid var(--panel-border);
+      border-radius: 20px;
+      padding: 20px 28px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(14px);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 170px;
+    }
+    .speedo-big {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 52px;
+      font-weight: 800;
+      line-height: 1;
+      color: #FFFFFF;
+    }
+    .speedo-unit {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .speedo-sub {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      color: #38BDF8;
+      margin-top: 4px;
+    }
+
+    .driver-stats-hud {
+      position: absolute;
+      bottom: 24px;
+      right: 24px;
+      z-index: 999;
+      background: rgba(11, 15, 25, 0.9);
+      border: 1px solid var(--panel-border);
+      border-radius: 16px;
+      padding: 16px 20px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(14px);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-width: 220px;
+    }
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+    }
+    .stat-lbl { color: var(--text-muted); }
+    .stat-val { font-family: 'JetBrains Mono', monospace; font-weight: 700; color: #FFF; }
+  </style>
+</head>
+<body>
+
+  <!-- UNIVERSAL HEADER -->
+  <header>
+    <div class="title-area">
+      <h1>Intelligent Dead Reckoning Navigation</h1>
+      <div class="subtitle">Real-time GNSS/INS Sensor Fusion & Blackout Navigation Engine</div>
+    </div>
+
+    <!-- VIEW SWITCHER (CENTER) -->
+    <div class="view-switcher">
+      <button id="btnViewMission" class="view-btn active" onclick="switchView('mission')">
+        <span>🛰️</span> Mission Control
+      </button>
+      <button id="btnViewDriver" class="view-btn" onclick="switchView('driver')">
+        <span>🚗</span> Driver Navigation
+      </button>
+    </div>
+
+    <!-- HEADER RIGHT -->
+    <div class="header-right">
+      <button id="btnResetTrack" class="reset-btn" onclick="resetSimulation()" title="Reset tracks and restart from origin">
+        <span>🔄</span> Reset Track
+      </button>
+
+      <div class="status-pill" id="connStatus">
+        <span class="pulse-dot"></span> Connecting...
+      </div>
+    </div>
+  </header>
+
+  <!-- INTERACTIVE COCKPIT BAR (OPERATIONS GROUPED) -->
+  <div class="cockpit-bar">
+    <!-- LEFT: DRIVING PEDALS & THROTTLE -->
+    <div class="cockpit-group">
+      <button class="preset-btn btn-brake" onclick="applyBrake()" title="Apply brakes to stop car">🛑 BRAKE / STOP</button>
+      <button class="preset-btn" onclick="setSpeed(30)">30 km/h</button>
+      <button class="preset-btn" onclick="setSpeed(60)">60 km/h</button>
+      <button class="preset-btn" onclick="setSpeed(80)">80 km/h</button>
+
+      <div class="slider-group">
+        <span class="control-label">Throttle:</span>
+        <input type="range" id="speedSlider" min="0" max="100" step="5" value="43" oninput="onSliderChange(this.value)">
+        <span class="slider-val" id="speedSliderVal">43 km/h</span>
+      </div>
+    </div>
+
+    <!-- RIGHT: DURATION, CUSTOM PATH TOOLS & STREAM PLAY/PAUSE -->
+    <div class="cockpit-group">
+      <span class="control-label">Duration:</span>
+      <select id="selDuration" class="cockpit-select" onchange="setDuration(this.value)">
+        <option value="50">50 Seconds</option>
+        <option value="100">100 Seconds</option>
+        <option value="200">200 Seconds</option>
+        <option value="-1">♾️ Infinite / Continuous</option>
+      </select>
+
+      <!-- CUSTOM PATH DRAW & RESET BUTTONS -->
+      <button id="btnDrawPath" class="btn-draw-path" onclick="toggleDrawMode()" title="Click to draw a custom path on the canvas with your mouse">
+        <span>✏️</span> Draw Path
+      </button>
+      <button id="btnResetPath" class="btn-reset-path" onclick="resetCustomPath()" title="Clear custom drawn path and restore default road">
+        <span>🗑️</span> Reset Path
+      </button>
+
+      <!-- STREAM PLAY/PAUSE (ON THE RIGHT AS REQUESTED) -->
+      <button id="btnPlayPause" class="btn-stream btn-start" onclick="toggleStreamPlay()">
+        <span>▶</span> Start Stream
+      </button>
+    </div>
+  </div>
+
+  <!-- VIEW 1: MISSION CONTROL (EVALUATION DASHBOARD) -->
+  <div id="missionControlView" class="view-container">
+    <div class="metric-strip">
+      <div class="metric-card">
+        <span class="metric-label">Vehicle Velocity</span>
+        <span class="metric-val" id="valSpeed">0.0 <span style="font-size:13px; color:var(--text-muted)">km/h</span></span>
+        <span class="metric-sub" id="valHeading">Heading: 0.0°</span>
+      </div>
+
+      <div class="metric-card">
+        <span class="metric-label">Total Distance</span>
+        <span class="metric-val" id="valDist">0.0 <span style="font-size:13px; color:var(--text-muted)">m</span></span>
+        <span class="metric-sub" id="valOutage">Outage Duration: 0.0s</span>
+      </div>
+
+      <div class="metric-card" id="cardDrift">
+        <span class="metric-label">Dead Reckoning Drift</span>
+        <span class="metric-val" id="valDrift">0.00 <span style="font-size:13px; color:var(--text-muted)">m</span></span>
+        <span class="metric-sub" id="valOutageDist">Outage Dist: 0.0 m</span>
+      </div>
+
+      <div class="metric-card" id="cardDriftPct">
+        <span class="metric-label">SIH Drift Benchmark</span>
+        <span class="metric-val" id="valDriftPct" style="color: #10B981;">0.00%</span>
+        <span class="metric-sub" id="valBenchmarkTarget">Target: &lt; 10% during blackout</span>
+      </div>
+
+      <div class="metric-card">
+        <span class="metric-label">ESKF Loop Latency</span>
+        <span class="metric-val" id="valLatency">0.00 <span style="font-size:13px; color:var(--text-muted)">ms</span></span>
+        <span class="metric-sub">50Hz Budget: &lt; 20ms (PASS)</span>
+      </div>
+
+      <div class="metric-card">
+        <span class="metric-label">Navigation Mode</span>
+        <span class="metric-val" id="valNavMode" style="font-size:16px; color:#10B981">GNSS_FIX</span>
+        <span class="metric-sub" id="valGnssState">LOCKED (GNSS)</span>
+      </div>
+    </div>
+
+    <div class="main-grid">
+      <!-- 2D Canvas Map -->
+      <div class="map-container">
+        <div class="map-header">
+          <div class="legend-item">
+            <div class="legend-line" style="background:#38BDF8"></div>
+            <span>Ground Truth Path</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-line" style="background:#F59E0B"></div>
+            <span>Dead Reckoning (ESKF + NHC)</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-line" style="background:#A855F7"></div>
+            <span>Custom Drawn Path</span>
+          </div>
+          <button id="btnFollowCar" class="btn-draw-path drawing-active" onclick="toggleAutoFollow()" style="margin-left:auto; padding:3px 8px; font-size:11px;" title="Toggle Camera Auto-Follow Car">
+            <span>🎯</span> Follow: ON
+          </button>
+        </div>
+
+        <!-- DRAW HELPER BANNER -->
+        <div class="draw-helper-banner" id="drawHelperBanner">
+          <span>✏️</span> Click and drag on canvas to draw your custom vehicle path. Release mouse to lock track!
+        </div>
+
+        <canvas id="mapCanvas"></canvas>
+      </div>
+
+      <!-- Right Column Telemetry & HUD -->
+      <div class="sidebar">
+        <!-- GNSS BLACKOUT TOGGLE BUTTON (PLACED NEXT TO LIVE NAVIGATION STATE) -->
+        <button id="btnSidebarGnss" class="gnss-sidebar-btn" onclick="toggleGnssOutage()">
+          <span>⚡</span> SIMULATE GNSS BLACKOUT
+        </button>
+
+        <div class="control-card">
+          <div class="card-title">Live Navigation State</div>
+          <div class="hud-row">
+            <span class="control-label">Position Est (X, Y)</span>
+            <span class="hud-val" id="hudPosEst">[0.0, 0.0]</span>
+          </div>
+          <div class="hud-row">
+            <span class="control-label">Position True (X, Y)</span>
+            <span class="hud-val" id="hudPosTrue">[0.0, 0.0]</span>
+          </div>
+          <div class="hud-row">
+            <span class="control-label">Stationary (ZUPT)</span>
+            <span class="hud-val" id="hudZupt">NO (Moving)</span>
+          </div>
+          <div class="hud-row">
+            <span class="control-label">Calibration (Attitude)</span>
+            <span class="hud-val" id="hudAttitude">0.0° / 0.0°</span>
+          </div>
+          <div class="hud-row">
+            <span class="control-label">WGS-84 Lat/Lon</span>
+            <span class="hud-val" id="hudWgs84">28.61390, 77.20900</span>
+          </div>
+          <div class="hud-row">
+            <span class="control-label">Custom Path Status</span>
+            <span class="hud-val" id="hudCustomPathStatus" style="color:#9CA3AF">None (Procedural)</span>
+          </div>
+        </div>
+
+        <div class="control-card">
+          <div class="card-title">Real-time Telemetry Feed</div>
+          <div class="telemetry-log" id="telemetryLog"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- VIEW 2: DRIVER NAVIGATION (LEAFLET MAP) -->
+  <div id="driverNavView" class="view-container">
+    <!-- Driver Top Alert Banner (Clickable to toggle GNSS) -->
+    <div id="driverBanner" class="driver-top-banner banner-gnss" onclick="toggleGnssOutage()" title="Click to toggle GNSS outage">
+      <span id="driverBannerIcon">🟢</span>
+      <span id="driverBannerText" class="banner-text">GNSS NAVIGATION LOCKED — CLICK TO SIMULATE OUTAGE</span>
+    </div>
+
+    <!-- Speedometer HUD -->
+    <div class="driver-speedo-hud">
+      <div class="speedo-unit">Speed</div>
+      <div class="speedo-big" id="driverSpeedVal">0</div>
+      <div class="speedo-unit">km/h</div>
+      <div class="speedo-sub" id="driverHeadingSub">HEADING: 0° N</div>
+    </div>
+
+    <!-- Status HUD -->
+    <div class="driver-stats-hud">
+      <div class="stat-row">
+        <span class="stat-lbl">Dead Reckoning Mode:</span>
+        <span class="stat-val" id="driverModeVal" style="color:#10B981">GNSS_FIX</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-lbl">Drift Error:</span>
+        <span class="stat-val" id="driverDriftVal">0.00 m</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-lbl">Outage Duration:</span>
+        <span class="stat-val" id="driverOutageVal">0.0 s</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-lbl">SIH Benchmark:</span>
+        <span class="stat-val" id="driverBenchVal" style="color:#10B981">&lt; 10% (PASS)</span>
+      </div>
+    </div>
+
+    <!-- Map container -->
+    <div id="driverMap"></div>
+  </div>
+
+  <!-- JAVASCRIPT ENGINE -->
+  <script>
+    const wsUrl = `ws://${window.location.host}/ws/telemetry`;
+    let ws = null;
+    let isStreaming = false;
+    let forcedOutageActive = false;
+    let currentPacket = null;
+
+    // Canvas Trajectory Arrays
+    let pathTrue = [];
+    let pathEst = [];
+
+    // Custom Path Drawing State
+    let isDrawModeActive = false;
+    let isMouseDownDrawing = false;
+    let userCustomPath = [];  // Points in meters: [[x, y], ...]
+
+    // Leaflet State
+    let driverMap = null;
+    let carMarker = null;
+    let navEstPolyline = null;
+    let navTruePolyline = null;
+    let navCustomPolyline = null;
+    let navEstPoints = [];
+    let navTruePoints = [];
+    let leafletInitialized = false;
+
+    // Canvas Setup
+    const canvas = document.getElementById('mapCanvas');
+    const ctx = canvas.getContext('2d');
+
+    function resizeCanvas() {
+      if (!canvas) return;
+      canvas.width = canvas.parentElement.clientWidth;
+      canvas.height = canvas.parentElement.clientHeight || 500;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    let camX = 0;
+    let camY = 0;
+    let autoFollow = true;
+
+    function toggleAutoFollow() {
+      autoFollow = !autoFollow;
+      const btn = document.getElementById('btnFollowCar');
+      if (btn) {
+        btn.innerHTML = autoFollow ? `<span>🎯</span> Follow: ON` : `<span>🎯</span> Follow: OFF`;
+        btn.className = autoFollow ? 'btn-draw-path drawing-active' : 'btn-draw-path';
+      }
+    }
+
+    function getCanvasTransform() {
+      const scale = 1.2;
+      let targetX = 0;
+      let targetY = 0;
+      if (currentPacket && currentPacket.pos_est) {
+        targetX = currentPacket.pos_est[0];
+        targetY = currentPacket.pos_est[1];
+      }
+
+      if (autoFollow && !isDrawModeActive) {
+        camX += (targetX - camX) * 0.08;
+        camY += (targetY - camY) * 0.08;
+      } else if (isDrawModeActive) {
+        camX += (0 - camX) * 0.08;
+        camY += (0 - camY) * 0.08;
+      }
+
+      const cx = canvas.width * 0.5 - camX * scale;
+      const cy = canvas.height * 0.5 + camY * scale;
+      return { cx, cy, scale };
+    }
+
+    function screenToWorld(sx, sy) {
+      const { cx, cy, scale } = getCanvasTransform();
+      const x = (sx - cx) / scale;
+      const y = (cy - sy) / scale;
+      return [x, y];
+    }
+
+    function worldToScreen(wx, wy) {
+      const { cx, cy, scale } = getCanvasTransform();
+      const sx = cx + wx * scale;
+      const sy = cy - wy * scale;
+      return [sx, sy];
+    }
+
+    // VIEW SWITCHING
+    function switchView(viewName) {
+      const missionView = document.getElementById('missionControlView');
+      const driverView = document.getElementById('driverNavView');
+      const btnMission = document.getElementById('btnViewMission');
+      const btnDriver = document.getElementById('btnViewDriver');
+
+      if (viewName === 'mission') {
+        missionView.style.display = 'grid';
+        driverView.style.display = 'none';
+        btnMission.classList.add('active');
+        btnDriver.classList.remove('active');
+        resizeCanvas();
+      } else {
+        missionView.style.display = 'none';
+        driverView.style.display = 'block';
+        btnMission.classList.remove('active');
+        btnDriver.classList.add('active');
+
+        if (!leafletInitialized) {
+          const lat = currentPacket ? currentPacket.lat_est : 28.6139;
+          const lon = currentPacket ? currentPacket.lon_est : 77.2090;
+          initLeafletMap(lat, lon);
+        }
+        if (driverMap) {
+          setTimeout(() => { driverMap.invalidateSize(); }, 60);
+        }
+      }
+    }
+
+    // LEAFLET INITIALIZATION
+    function initLeafletMap(lat, lon) {
+      if (leafletInitialized) return;
+      const initialLat = lat || 28.6139;
+      const initialLon = lon || 77.2090;
+
+      driverMap = L.map('driverMap', {
+        zoomControl: false,
+        attributionControl: false
+      }).setView([initialLat, initialLon], 18);
+
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        maxZoom: 19,
+        subdomains: 'abcd',
+      }).addTo(driverMap);
+
+      const carSvg = `
+        <div id="carIconPuck" style="transform-origin: center center; transition: transform 0.05s linear; display:flex; align-items:center; justify-content:center;">
+          <svg width="42" height="42" viewBox="0 0 42 42" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="21" cy="21" r="19" fill="rgba(37, 99, 235, 0.25)" stroke="#38BDF8" stroke-width="2"/>
+            <path d="M21 5L33 33L21 26L9 33L21 5Z" fill="#38BDF8" stroke="#FFFFFF" stroke-width="1.8" stroke-linejoin="round"/>
+          </svg>
+        </div>
+      `;
+
+      const carIcon = L.divIcon({
+        html: carSvg,
+        className: 'driver-car-icon',
+        iconSize: [42, 42],
+        iconAnchor: [21, 21],
+      });
+
+      carMarker = L.marker([initialLat, initialLon], { icon: carIcon }).addTo(driverMap);
+
+      navTruePolyline = L.polyline([], {
+        color: '#38BDF8',
+        weight: 3,
+        opacity: 0.5,
+        dashArray: '6, 8'
+      }).addTo(driverMap);
+
+      navEstPolyline = L.polyline([], {
+        color: '#10B981',
+        weight: 4.5,
+        opacity: 0.95
+      }).addTo(driverMap);
+
+      navCustomPolyline = L.polyline([], {
+        color: '#A855F7',
+        weight: 3,
+        opacity: 0.8,
+        dashArray: '4, 6'
+      }).addTo(driverMap);
+
+      leafletInitialized = true;
+    }
+
+    // WEBSOCKET BRIDGE
+    function connectWS() {
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        document.getElementById('connStatus').innerHTML = '<span class="pulse-dot"></span> Connected (50Hz Stream)';
+        document.getElementById('connStatus').style.color = "#10B981";
+      };
+
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.type === "TELEMETRY") {
+          currentPacket = data;
+          updateDashboard(data);
+          updateDriverNav(data);
+
+          if (isStreaming) {
+            pathTrue.push(data.pos_true);
+            pathEst.push({ pos: data.pos_est, mode: data.mode });
+            if (pathTrue.length > 2500) {
+              pathTrue.shift();
+              pathEst.shift();
+            }
+          }
+        } else if (data.type === "RESET" || data.type === "LOOP_RESTART") {
+          clearAllTracks();
+        } else if (data.type === "CUSTOM_PATH_SET") {
+          userCustomPath = data.points || [];
+          document.getElementById('hudCustomPathStatus').textContent = `Active (${userCustomPath.length} pts)`;
+          document.getElementById('hudCustomPathStatus').style.color = '#A855F7';
+        } else if (data.type === "CUSTOM_PATH_CLEARED") {
+          userCustomPath = [];
+          document.getElementById('hudCustomPathStatus').textContent = 'None (Procedural)';
+          document.getElementById('hudCustomPathStatus').style.color = '#9CA3AF';
+        }
+      };
+
+      ws.onclose = () => {
+        document.getElementById('connStatus').innerHTML = '○ Disconnected (Reconnecting...)';
+        document.getElementById('connStatus').style.color = "#EF4444";
+        setTimeout(connectWS, 1500);
+      };
+    }
+    connectWS();
+
+    function clearAllTracks() {
+      pathTrue = [];
+      pathEst = [];
+      navEstPoints = [];
+      navTruePoints = [];
+      camX = 0;
+      camY = 0;
+      if (navEstPolyline) navEstPolyline.setLatLngs([]);
+      if (navTruePolyline) navTruePolyline.setLatLngs([]);
+      const log = document.getElementById('telemetryLog');
+      if (log) log.innerHTML = '';
+    }
+
+    // DASHBOARD UPDATE
+    function updateDashboard(d) {
+      document.getElementById('valSpeed').innerHTML = `${d.speed_kmh.toFixed(1)} <span style="font-size:13px; color:var(--text-muted)">km/h</span>`;
+      document.getElementById('valHeading').textContent = `Heading: ${d.heading_deg.toFixed(1)}°`;
+      document.getElementById('valDist').innerHTML = `${d.total_distance_m.toFixed(1)} <span style="font-size:13px; color:var(--text-muted)">m</span>`;
+      document.getElementById('valOutage').textContent = `Outage Duration: ${d.outage_duration_s.toFixed(1)}s`;
+      document.getElementById('valDrift').innerHTML = `${d.drift_m.toFixed(2)} <span style="font-size:13px; color:var(--text-muted)">m</span>`;
+      document.getElementById('valOutageDist').textContent = `Outage Dist: ${d.outage_distance_m ? d.outage_distance_m.toFixed(1) : '0.0'} m`;
+      document.getElementById('valLatency').innerHTML = `${d.latency_ms.toFixed(2)} <span style="font-size:13px; color:var(--text-muted)">ms</span>`;
+
+      // SIH Benchmark Evaluation
+      const cardDriftPct = document.getElementById('cardDriftPct');
+      const valDriftPct = document.getElementById('valDriftPct');
+      const valTarget = document.getElementById('valBenchmarkTarget');
+
+      if (d.gnss_status.includes("BLACKOUT")) {
+        if (d.benchmark_status === "VIOLATED" || d.drift_pct >= 10.0) {
+          cardDriftPct.className = "metric-card alert-violated";
+          valDriftPct.textContent = `${d.drift_pct.toFixed(2)}% (FAILED)`;
+          valDriftPct.style.color = "#EF4444";
+          valTarget.textContent = `VIOLATED: Exceeded 10% limit!`;
+          valTarget.style.color = "#EF4444";
+        } else if (d.benchmark_status === "WARNING") {
+          cardDriftPct.className = "metric-card alert-warning";
+          valDriftPct.textContent = `${d.drift_pct.toFixed(2)}% (WARNING)`;
+          valDriftPct.style.color = "#F59E0B";
+          valTarget.textContent = `Within margin (< 10%)`;
+          valTarget.style.color = "#F59E0B";
+        } else {
+          cardDriftPct.className = "metric-card";
+          valDriftPct.textContent = `${d.drift_pct.toFixed(2)}% (PASS)`;
+          valDriftPct.style.color = "#10B981";
+          valTarget.textContent = `SIH Benchmark: < 10%`;
+          valTarget.style.color = "var(--text-muted)";
+        }
+      } else {
+        cardDriftPct.className = "metric-card";
+        valDriftPct.textContent = "0.00% (GNSS LOCKED)";
+        valDriftPct.style.color = "#10B981";
+        valTarget.textContent = `SIH Benchmark: < 10% on Outage`;
+        valTarget.style.color = "var(--text-muted)";
+      }
+
+      const valNavMode = document.getElementById('valNavMode');
+      valNavMode.textContent = d.mode;
+      valNavMode.style.color = d.mode === 'GNSS_FIX' ? '#10B981' : (d.mode === 'DEAD_RECKONING' ? '#F59E0B' : '#38BDF8');
+      document.getElementById('valGnssState').textContent = d.gnss_status;
+
+      updateGnssSidebarButton(d.forced_outage || d.gnss_status.includes("BLACKOUT"));
+
+      const zuptStatus = d.is_stationary ? "YES (ZUPT Active)" : "NO (Moving)";
+      document.getElementById('hudPosEst').textContent = `[${d.pos_est[0]}, ${d.pos_est[1]}]`;
+      document.getElementById('hudPosTrue').textContent = `[${d.pos_true[0]}, ${d.pos_true[1]}]`;
+      document.getElementById('hudZupt').textContent = zuptStatus;
+      document.getElementById('hudZupt').style.color = d.is_stationary ? "#38BDF8" : "#9CA3AF";
+      document.getElementById('hudAttitude').textContent = `P: ${d.pitch_deg.toFixed(1)}° | R: ${d.roll_deg.toFixed(1)}°`;
+      document.getElementById('hudWgs84').textContent = `${d.lat_est.toFixed(5)}, ${d.lon_est.toFixed(5)}`;
+
+      if (d.step % 10 === 0) {
+        const log = document.getElementById('telemetryLog');
+        const row = document.createElement('div');
+        row.className = 'log-row';
+        row.textContent = `[#${d.step}] ${d.mode} | ${d.speed_kmh}km/h | Drift: ${d.drift_m}m (${d.drift_pct}%)`;
+        log.appendChild(row);
+        if (log.children.length > 25) log.removeChild(log.children[0]);
+        log.scrollTop = log.scrollHeight;
+      }
+    }
+
+    // DRIVER NAVIGATION HUD UPDATE
+    function updateDriverNav(d) {
+      document.getElementById('driverSpeedVal').textContent = Math.round(d.speed_kmh);
+      document.getElementById('driverHeadingSub').textContent = `HEADING: ${Math.round(d.heading_deg)}°`;
+      document.getElementById('driverModeVal').textContent = d.mode;
+      document.getElementById('driverDriftVal').textContent = `${d.drift_m.toFixed(2)} m`;
+      document.getElementById('driverOutageVal').textContent = `${d.outage_duration_s.toFixed(1)} s`;
+
+      const driverBenchVal = document.getElementById('driverBenchVal');
+      if (d.gnss_status.includes("BLACKOUT")) {
+        if (d.benchmark_status === "VIOLATED") {
+          driverBenchVal.textContent = `${d.drift_pct.toFixed(1)}% (EXCEEDED)`;
+          driverBenchVal.style.color = "#EF4444";
+        } else {
+          driverBenchVal.textContent = `${d.drift_pct.toFixed(1)}% (PASS)`;
+          driverBenchVal.style.color = "#10B981";
+        }
+      } else {
+        driverBenchVal.textContent = `LOCKED (PASS)`;
+        driverBenchVal.style.color = "#10B981";
+      }
+
+      const banner = document.getElementById('driverBanner');
+      const bannerText = document.getElementById('driverBannerText');
+      const bannerIcon = document.getElementById('driverBannerIcon');
+
+      if (d.is_stationary) {
+        banner.className = "driver-top-banner banner-gnss";
+        bannerIcon.textContent = "🅿️";
+        bannerText.textContent = "VEHICLE STOPPED — ZERO VELOCITY UPDATE (ZUPT) ACTIVE";
+      } else if (d.gnss_status.includes("BLACKOUT")) {
+        banner.className = "driver-top-banner banner-outage";
+        bannerIcon.textContent = "⚠️";
+        bannerText.textContent = "GNSS BLACKOUT (TUNNEL) — DEAD RECKONING ACTIVE (CLICK TO RESTORE)";
+      } else {
+        banner.className = "driver-top-banner banner-gnss";
+        bannerIcon.textContent = "🟢";
+        bannerText.textContent = "GNSS NAVIGATION LOCKED — CLICK TO SIMULATE OUTAGE";
+      }
+
+      if (leafletInitialized && carMarker && d.lat_est) {
+        const estLatLng = [d.lat_est, d.lon_est];
+        const trueLatLng = [d.lat_true, d.lon_true];
+
+        carMarker.setLatLng(estLatLng);
+        const iconElem = document.getElementById('carIconPuck');
+        if (iconElem) {
+          iconElem.style.transform = `rotate(${d.heading_deg}deg)`;
+        }
+
+        if (isStreaming) {
+          navEstPoints.push(estLatLng);
+          navTruePoints.push(trueLatLng);
+          if (navEstPoints.length > 2000) {
+            navEstPoints.shift();
+            navTruePoints.shift();
+          }
+
+          if (d.step % 4 === 0) {
+            driverMap.panTo(estLatLng, { animate: false });
+            navEstPolyline.setLatLngs(navEstPoints);
+            navTruePolyline.setLatLngs(navTruePoints);
+
+            if (d.gnss_status.includes("BLACKOUT")) {
+              navEstPolyline.setStyle({ color: '#F59E0B' });
+            } else {
+              navEstPolyline.setStyle({ color: '#10B981' });
+            }
+          }
+        }
+      }
+    }
+
+    function updateGnssSidebarButton(isBlackout) {
+      forcedOutageActive = isBlackout;
+      const btn = document.getElementById('btnSidebarGnss');
+      if (forcedOutageActive) {
+        btn.className = "gnss-sidebar-btn active-outage";
+        btn.innerHTML = `<span>🛑</span> RESTORE GNSS FIX`;
+      } else {
+        btn.className = "gnss-sidebar-btn";
+        btn.innerHTML = `<span>⚡</span> SIMULATE GNSS BLACKOUT`;
+      }
+    }
+
+    // INTERACTIVE CONTROLS
+    async function toggleStreamPlay() {
+      const btn = document.getElementById('btnPlayPause');
+      if (!isStreaming) {
+        await fetch('/api/stream/start', { method: 'POST' });
+        isStreaming = true;
+        btn.className = 'btn-stream btn-pause';
+        btn.innerHTML = '<span>⏸</span> Pause Stream';
+      } else {
+        await fetch('/api/stream/stop', { method: 'POST' });
+        isStreaming = false;
+        btn.className = 'btn-stream btn-start';
+        btn.innerHTML = '<span>▶</span> Start Stream';
+      }
+    }
+
+    async function toggleGnssOutage() {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ action: 'TOGGLE_GNSS' }));
+      } else {
+        const res = await fetch('/api/stream/toggle-gnss', { method: 'POST' });
+        const data = await res.json();
+        updateGnssSidebarButton(data.forced_outage);
+      }
+    }
+
+    async function resetSimulation() {
+      clearAllTracks();
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ action: 'RESET' }));
+      } else {
+        await fetch('/api/stream/reset', { method: 'POST' });
+      }
+    }
+
+    async function applyBrake() {
+      document.getElementById('speedSlider').value = 0;
+      document.getElementById('speedSliderVal').textContent = '0 km/h';
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ action: 'BRAKE', emergency: true }));
+      } else {
+        await fetch('/api/vehicle/control', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ emergency_brake: true })
+        });
+      }
+    }
+
+    async function setSpeed(kmh) {
+      document.getElementById('speedSlider').value = kmh;
+      document.getElementById('speedSliderVal').textContent = `${kmh} km/h`;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ action: 'SET_SPEED', speed_kmh: kmh }));
+      } else {
+        await fetch('/api/vehicle/control', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ target_speed_kmh: kmh })
+        });
+      }
+    }
+
+    function onSliderChange(val) {
+      document.getElementById('speedSliderVal').textContent = `${val} km/h`;
+      setSpeed(parseFloat(val));
+    }
+
+    async function setDuration(seconds) {
+      const s = parseFloat(seconds);
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ action: 'SET_DURATION', duration_s: s }));
+      } else {
+        await fetch('/api/vehicle/control', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ duration_s: s })
+        });
+      }
+    }
+
+    // --- MOUSE DRAWING CUSTOM PATH INTERACTION ---
+    function toggleDrawMode() {
+      isDrawModeActive = !isDrawModeActive;
+      const btn = document.getElementById('btnDrawPath');
+      const banner = document.getElementById('drawHelperBanner');
+
+      if (isDrawModeActive) {
+        btn.classList.add('drawing-active');
+        btn.innerHTML = `<span>✏️</span> Drawing Mode ON`;
+        canvas.classList.add('crosshair');
+        banner.style.display = 'flex';
+      } else {
+        btn.classList.remove('drawing-active');
+        btn.innerHTML = `<span>✏️</span> Draw Path`;
+        canvas.classList.remove('crosshair');
+        banner.style.display = 'none';
+      }
+    }
+
+    canvas.addEventListener('mousedown', (e) => {
+      if (!isDrawModeActive) return;
+      isMouseDownDrawing = true;
+      userCustomPath = [];
+      const rect = canvas.getBoundingClientRect();
+      const pt = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
+      userCustomPath.push(pt);
+    });
+
+    canvas.addEventListener('mousemove', (e) => {
+      if (!isDrawModeActive || !isMouseDownDrawing) return;
+      const rect = canvas.getBoundingClientRect();
+      const pt = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
+      const last = userCustomPath[userCustomPath.length - 1];
+      const dist = Math.hypot(pt[0] - last[0], pt[1] - last[1]);
+      if (dist >= 0.5) {
+        userCustomPath.push(pt);
+      }
+    });
+
+    canvas.addEventListener('mouseup', async () => {
+      if (!isDrawModeActive || !isMouseDownDrawing) return;
+      isMouseDownDrawing = false;
+      if (userCustomPath.length > 3) {
+        await submitCustomPath(userCustomPath);
+        toggleDrawMode();
+      }
+    });
+
+    async function submitCustomPath(points) {
+      clearAllTracks();
+      await fetch('/api/path/custom', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ points: points })
+      });
+    }
+
+    async function resetCustomPath() {
+      userCustomPath = [];
+      clearAllTracks();
+      await fetch('/api/path/reset', { method: 'POST' });
+    }
+
+    // 2D CANVAS DRAW LOOP
+    function drawMap() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      const { cx, cy, scale } = getCanvasTransform();
+
+      // Scrolling Grid
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.04)";
+      ctx.lineWidth = 1;
+      const gridSize = 50 * scale;
+      const ox = (cx % gridSize + gridSize) % gridSize;
+      const oy = (cy % gridSize + gridSize) % gridSize;
+      for (let x = ox; x < canvas.width; x += gridSize) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+      }
+      for (let y = oy; y < canvas.height; y += gridSize) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+      }
+
+      // Tunnel Zone Visual (if blackout active)
+      if (forcedOutageActive) {
+        ctx.fillStyle = "rgba(239, 68, 68, 0.06)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "rgba(239, 68, 68, 0.7)";
+        ctx.font = "bold 13px Outfit";
+        ctx.fillText("● GNSS DENIED TUNNEL ENVIRONMENT ACTIVE", 24, canvas.height - 24);
+      }
+
+      // Draw User-Defined Custom Path (Purple Glow)
+      if (userCustomPath.length > 1) {
+        ctx.strokeStyle = "#A855F7";
+        ctx.lineWidth = 3.5;
+        ctx.setLineDash([5, 5]);
+        ctx.beginPath();
+        for (let i = 0; i < userCustomPath.length; i++) {
+          const pt = userCustomPath[i];
+          const px = cx + pt[0] * scale;
+          const py = cy - pt[1] * scale;
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Start & End markers
+        const startPt = userCustomPath[0];
+        const endPt = userCustomPath[userCustomPath.length - 1];
+        ctx.fillStyle = "#10B981";
+        ctx.beginPath();
+        ctx.arc(cx + startPt[0] * scale, cy - startPt[1] * scale, 6, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = "#A855F7";
+        ctx.beginPath();
+        ctx.arc(cx + endPt[0] * scale, cy - endPt[1] * scale, 6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Ground Truth Path (Cyan Dashed)
+      if (pathTrue.length > 1) {
+        ctx.strokeStyle = "#38BDF8";
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        for (let i = 0; i < pathTrue.length; i++) {
+          const pt = pathTrue[i];
+          const px = cx + pt[0] * scale;
+          const py = cy - pt[1] * scale;
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      // Estimated Path (Solid Amber / Green)
+      if (pathEst.length > 1) {
+        for (let i = 1; i < pathEst.length; i++) {
+          const p1 = pathEst[i - 1];
+          const p2 = pathEst[i];
+          ctx.strokeStyle = p2.mode === 'GNSS_FIX' ? '#10B981' : (p2.mode === 'STATIONARY_LOCK' ? '#38BDF8' : '#F59E0B');
+          ctx.lineWidth = 3.2;
+          ctx.beginPath();
+          ctx.moveTo(cx + p1.pos[0] * scale, cy - p1.pos[1] * scale);
+          ctx.lineTo(cx + p2.pos[0] * scale, cy - p2.pos[1] * scale);
+          ctx.stroke();
+        }
+      }
+
+      // Vehicle Marker
+      if (currentPacket) {
+        const vx = cx + currentPacket.pos_est[0] * scale;
+        const vy = cy - currentPacket.pos_est[1] * scale;
+        const headingRad = currentPacket.heading_deg * (Math.PI / 180);
+
+        ctx.save();
+        ctx.translate(vx, vy);
+        ctx.rotate(-headingRad);
+
+        ctx.fillStyle = currentPacket.mode === 'GNSS_FIX' ? "rgba(16, 185, 129, 0.3)" : "rgba(245, 158, 11, 0.3)";
+        ctx.beginPath();
+        ctx.arc(0, 0, 18, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = "#FFFFFF";
+        ctx.beginPath();
+        ctx.moveTo(15, 0);
+        ctx.lineTo(-11, -9);
+        ctx.lineTo(-7, 0);
+        ctx.lineTo(-11, 9);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.restore();
+      }
+
+      requestAnimationFrame(drawMap);
+    }
+    requestAnimationFrame(drawMap);
+  </script>
+</body>
+</html>
